@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Generated artifacts (reproducible from code + data/ — see README)
+records/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

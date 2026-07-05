@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.csv text
+*.md  text
+*.py  text
+*.pdf binary
+*.png binary
+*.jpg binary

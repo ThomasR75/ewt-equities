@@ -1,0 +1,9 @@
+# Python 3.12 recommended. Install: python -m pip install -r requirements.txt
+numpy>=1.26
+pandas>=2.1
+matplotlib>=3.8
+mplfinance>=0.12.10b0
+scikit-learn>=1.4
+reportlab>=4.0
+pytest>=8.0
+# Optional: local LLM weigher arm (see RUN_LLM_ARM.md) also needs an Ollama server + `pip install ollama`
