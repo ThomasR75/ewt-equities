@@ -73,25 +73,34 @@ pytest -q                                          # engine determinism + no-loo
 ## Reproduce the results
 
 ```bash
-# 1. Deterministic signal stream over all 50 instruments (annual walk-forward)
+# 1. Generate signal streams (monthly walk-forward) for both weighers.
+#    The LLM arm needs a local Ollama server + the model pulled (see RUN_LLM_ARM.md).
 python batch_universe.py data/prices_anonymized.csv --weigher deterministic \
-    --stocks 1-50 --start 1962-01-01 --step 12M --out records/universe
+    --stocks 1-50 --start 1962-01-01 --step 1M --out records/universe_monthly
+python batch_universe.py data/prices_anonymized.csv --weigher ollama \
+    --model qwen2.5:7b-instruct --stocks 1-50 --start 1962-01-01 --step 1M --out records/universe_monthly
 
-# 2. Score it (Wilson + bootstrap + random-direction null + calibration)
-python aggregate_tester.py records/universe --weigher deterministic
+# 2. Canonical scorer (Wilson + bootstrap + random-direction null + calibration)
+python aggregate_tester.py records/universe_monthly --weigher deterministic
+python aggregate_tester.py records/universe_monthly --weigher ollama
 
-# 3. Pivot-sensitivity disjoint test (structural ATR mode)
+# 3. Full paper statistics (Sections 4 & 7): drift control, grade A>B
+#    (permutation + split-half), Brier/ECE, cost sensitivity
+python analysis/paper_stats.py records/universe_monthly
+
+# 4. Robustness: sensitivity disjoint test (S5.1) and learned-weigher AUC (S5.2)
 python sweep_sensitivity.py data/prices_anonymized.csv --stocks 1-50 \
     --pivot-mode atr --scales 4,5,6 --step 12M --cutoff 2015-01-01
+python analysis/gbt_feature_test.py data/prices_anonymized.csv --atr-k 4
 
-# 4. Learned weigher: build table, train, evaluate
-python build_training_table.py data/prices_anonymized.csv --stocks 1-50 --out records/train_table.csv
-python train_weigher.py records/train_table.csv
+# 5. Count-subjectivity diagnostics + figures
+python analysis/count_diagnostics.py data/prices_anonymized.csv
 
-# 5. Local-LLM weigher arm (needs Ollama) — see RUN_LLM_ARM.md
 # 6. Rebuild the paper
 python paper/build_paper.py
 ```
+
+See `analysis/README.md` for which script reproduces which paper result.
 
 ## Caveats
 
