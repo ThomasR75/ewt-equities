@@ -118,7 +118,7 @@ function render(){
     const zCell=z==null?"—":`<span class="${Math.abs(z)>=2?(z>0?"neg":"pos"):""}">${z>=0?"+":""}${z.toFixed(2)}</span>`;
     const rsi=t.rsi14;
     const rsiCell=rsi==null?"—":`<span class="${rsi>=70?"neg":rsi<=30?"pos":""}">${rsi.toFixed(0)}</span>`;
-    tr.innerHTML=`<td>${i+1}</td><td class="tk tkr">${x.ticker}</td>
+    tr.innerHTML=`<td>${i+1}</td><td class="tk tkr" title="${(x.name||x.ticker).replace(/"/g,'&quot;')}" style="cursor:help">${x.ticker}</td>
       <td><span class="bar" style="width:${bw}px"></span> ${(x.long_score*100).toFixed(0)}</td>
       <td>${g}</td><td>${c.setup?fmt(c.setup.rr):"—"}</td><td>${fmt(x.last_price)}</td>
       <td>${maCell}</td><td>${zCell}</td>
