@@ -7,3 +7,7 @@ scikit-learn>=1.4
 reportlab>=4.0
 pytest>=8.0
 # Optional: local LLM weigher arm (see RUN_LLM_ARM.md) also needs an Ollama server + `pip install ollama`
+flask>=3.0        # calibration platform server (calib/app.py)
+joblib>=1.3        # trained weigher load (fitter)
+lightgbm>=4.0      # GBT scenario weigher (fitter)
+yfinance>=0.2        # price + fundamentals fetch (fetch_sp500 / fetch_fundamentals)

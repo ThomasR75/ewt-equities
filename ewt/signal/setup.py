@@ -5,6 +5,10 @@ DEGREE-SCALED invalidation/stop: the throw-over room granted beyond the
 completion pivot is a fraction of the final leg's log size (its degree),
 clamped to a band. A Cycle-degree top is not voided by the same wiggle that
 would void a Minor one.
+
+All tunable constants now live in CalibConfig (ewt/signal/calib.py); the
+module-level names below remain the frozen v1.2 defaults so untouched callers
+and tests reproduce prior behaviour exactly.
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ import math
 
 from ..schemas import Scenario, Setup
 from ..levels.fibonacci import fib_levels
+from .calib import CalibConfig, DEFAULT as _DEFAULT_CFG
 
 RR_FLOOR = 2.0
 ENTRY_OFFSET = 0.02       # enter ~2% off the completion pivot (confirmation nudge)
@@ -26,10 +31,11 @@ NEAR_TOL = 0.01
 EXT_RATIOS = (1.272, 1.618, 2.618)
 
 
-def _direction_targets(count, entry: float, direction: int, base_log: float) -> list[float]:
+def _direction_targets(count, entry: float, direction: int, base_log: float,
+                       ext_ratios=EXT_RATIOS) -> list[float]:
     le = math.log(entry)
     cand = [fl.price for fl in fib_levels(count) if fl.price > 0]
-    cand += [math.exp(le + direction * k * base_log) for k in EXT_RATIOS]
+    cand += [math.exp(le + direction * k * base_log) for k in ext_ratios]
     if direction > 0:
         cand = sorted(x for x in cand if x > entry * 1.005)
     else:
@@ -42,7 +48,9 @@ def _direction_targets(count, entry: float, direction: int, base_log: float) -> 
 
 
 def build_setup(scenario: Scenario, last_price, as_of: str, ticker: str,
-                horizon_bars: int = 60, n_prior: int = 0) -> Setup | None:
+                horizon_bars: int = 60, n_prior: int = 0,
+                cfg: CalibConfig | None = None) -> Setup | None:
+    cfg = cfg or _DEFAULT_CFG
     count = scenario.primary_count
     d = scenario.direction
     if count is None or d == 0 or not last_price or last_price <= 0:
@@ -56,23 +64,23 @@ def build_setup(scenario: Scenario, last_price, as_of: str, ticker: str,
 
     # Degree-scaled invalidation tolerance (throw-over room beyond the pivot).
     leg_log = abs(lx - math.log(final.start.price))
-    tol = min(MAX_TOL, max(MIN_TOL, TOL_K * leg_log))
+    tol = min(cfg.max_tol_log, max(cfg.min_tol_log, cfg.tol_k * leg_log))
 
-    entry = extreme * math.exp(d * ENTRY_OFFSET)       # toward target, just off pivot
+    entry = extreme * math.exp(d * cfg.entry_offset)   # toward target, just off pivot
     invalid = extreme * math.exp(-d * tol)             # beyond pivot by degree room
-    stop = invalid * math.exp(-d * STOP_EXTRA)
+    stop = invalid * math.exp(-d * cfg.stop_extra)
     le, ls, lp = math.log(entry), math.log(stop), math.log(last_price)
     risk_log = abs(le - ls)
-    if risk_log < MIN_RISK_LOG:
+    if risk_log < cfg.min_risk_log:
         return None
 
     # Price must still be near the completion (not past pivot / not chasing).
     prog = (lp - lx) * d
-    if prog < -NEAR_TOL or prog > NEAR_MAX:
+    if prog < -cfg.near_tol or prog > cfg.near_max:
         return None
 
     base_log = leg_log or risk_log
-    targets = _direction_targets(count, entry, d, base_log)
+    targets = _direction_targets(count, entry, d, base_log, cfg.ext_ratios)
     if not targets:
         return None
     t1 = targets[0]

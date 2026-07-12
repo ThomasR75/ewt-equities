@@ -5,20 +5,23 @@
       or R/R near the 2:1 floor.
   None  fails the R/R gate -> "not a setup".
 
-Deterministic: derived from the setup's R/R, the lead scenario weight, and
-whether a strong opposing alternate exists.
+All thresholds live in CalibConfig (ewt/signal/calib.py); defaults reproduce
+the frozen behaviour. Deterministic: derived from the setup's R/R, the lead
+scenario weight, and whether a strong opposing alternate exists.
 """
 
 from __future__ import annotations
 
 from ..schemas import Scenario, Setup
-from .setup import RR_FLOOR
+from .calib import CalibConfig, DEFAULT as _DEFAULT_CFG
 
 
-def grade_setup(setup: Setup, scenarios: list[Scenario]) -> Setup:
+def grade_setup(setup: Setup, scenarios: list[Scenario],
+                cfg: CalibConfig | None = None) -> Setup:
+    cfg = cfg or _DEFAULT_CFG
     if setup is None:
         return setup
-    if setup.rr < RR_FLOOR:
+    if setup.rr < cfg.rr_floor:
         setup.grade = None
         return setup
 
@@ -30,8 +33,8 @@ def grade_setup(setup: Setup, scenarios: list[Scenario]) -> Setup:
                if not s.is_residual and s.direction == -setup_direction(setup)),
               default=0.0)
 
-    confirmed = lead_w >= 0.5
-    held_back = (lead_w < 0.5) or (opp >= 0.30) or (setup.rr < 2.5)
+    confirmed = lead_w >= cfg.confirm_lead_w
+    held_back = (lead_w < cfg.confirm_lead_w) or (opp >= cfg.opp_alt_w) or (setup.rr < cfg.rr_comfort)
 
     if confirmed and not held_back:
         setup.grade = "A"

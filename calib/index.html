@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EW Calibration Platform</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.min.css">
+<script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
+<style>
+:root{--bg:#0f1420;--panel:#182234;--panel2:#1e2a40;--ink:#e8eef7;--mut:#8a9ab5;--mut2:#93a3bd;
+--line:#2a3852;--up:#28c07a;--down:#f0644b;--acc:#5aa0ff;--gold:#f4c04d;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:1480px;margin:0 auto;padding:20px}
+h1{font-size:22px;margin:0 0 2px}
+.sub{color:var(--mut2);font-size:13px;margin-bottom:6px}
+.caveat{background:#2a1e12;border:1px solid #5a3d1a;color:#e8c890;font-size:12px;
+padding:8px 12px;border-radius:8px;margin:10px 0 14px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.grid{display:grid;grid-template-columns:minmax(700px,1.35fr) minmax(430px,1fr);gap:16px}
+@media(max-width:1120px){.grid{grid-template-columns:1fr}}
+
+/* control panel */
+.ctl{margin-bottom:16px}
+.ctl-head{display:flex;align-items:center;gap:14px;padding:11px 16px;border-bottom:1px solid var(--line);cursor:pointer}
+.ctl-head h2{font-size:15px;margin:0}
+.ctl-head .chev{transition:transform .15s;color:var(--mut2)}
+.ctl.collapsed .chev{transform:rotate(-90deg)}
+.ctl.collapsed .ctl-body{display:none}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:2px 9px;border-radius:20px;background:#0e1626;border:1px solid var(--line);color:var(--mut2)}
+.pill b{color:var(--ink)}
+.pill.gA b{color:#4ee39a}.pill.gB b{color:#f4c04d}.pill.gL b{color:#5aa0ff}.pill.gS b{color:#f0644b}
+.ctl-actions{margin-left:auto;display:flex;gap:8px;align-items:center}
+button{background:#22314d;color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:5px 11px;font-size:12px;cursor:pointer}
+button:hover{background:#2a3c5c}
+button.on{background:#2f4a7a;border-color:var(--acc)}
+.ctl-body{padding:12px 16px 16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:6px 26px}
+.grp{margin-top:6px}
+.grp h3{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--acc);margin:8px 0 6px;font-weight:700}
+.f{display:grid;grid-template-columns:1fr 120px 56px;align-items:center;gap:10px;padding:3px 0}
+.f label{font-size:12.5px;color:var(--mut2)}
+.f input[type=range]{width:100%;accent-color:var(--acc)}
+.f .val{font-size:12.5px;color:var(--ink);text-align:right;font-variant-numeric:tabular-nums}
+.f.changed label,.f.changed .val{color:var(--gold)}
+.fib{display:flex;gap:8px;align-items:center}
+.fib input{width:64px;background:#0e1626;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:3px 6px;font-size:12px}
+
+/* table */
+.controls{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:9px 13px;border-bottom:1px solid var(--line);font-size:12.5px;color:var(--mut2)}
+.controls select{background:#0e1626;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:3px 6px;font-size:12px}
+.controls label{cursor:pointer;user-select:none}
+.tbl-scroll{max-height:70vh;overflow:auto}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th,td{padding:6px 8px;text-align:right;white-space:nowrap}
+th{color:var(--mut2);font-weight:600;border-bottom:1px solid var(--line);cursor:pointer;position:sticky;top:0;background:var(--panel);z-index:2}
+th.sorted{color:var(--acc)}
+th:first-child,td:first-child,th.tk,td.tk{text-align:left}
+tbody tr{border-bottom:1px solid #1f2b40;cursor:pointer}
+tbody tr:hover{background:var(--panel2)}
+tbody tr.sel{background:#22314d;box-shadow:inset 3px 0 0 var(--acc)}
+.tkr{font-weight:700}
+.bar{display:inline-block;height:7px;border-radius:4px;background:var(--acc);vertical-align:middle}
+.badge{display:inline-block;min-width:18px;padding:1px 6px;border-radius:6px;font-weight:700;font-size:11.5px}
+.gA{background:#173d2a;color:#4ee39a;border:1px solid #276b47}
+.gB{background:#2f2a12;color:#f4c04d;border:1px solid #6b5a1f}
+.gN{color:#5a6a86}
+.pos{color:var(--up)}.neg{color:var(--down)}
+.chip{font-size:10.5px;padding:0 5px;border-radius:4px;border:1px solid var(--line);color:var(--mut2)}
+
+/* chart */
+.chartwrap{padding:13px 15px}
+.chead{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:10px}
+.chead .big{font-size:19px;font-weight:700}
+.tf{display:flex;gap:4px}
+.tf button{padding:3px 10px}
+svg{width:100%;height:auto;display:block;background:#111a29;border-radius:8px}
+.legend{display:flex;gap:12px;font-size:11.5px;color:var(--mut2);margin-top:7px;flex-wrap:wrap}
+.dot{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:middle}
+.meta{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:11px;font-size:12.5px}
+.kv{color:var(--mut2)} .kv b{color:var(--ink)}
+.scz{margin-top:12px;border-top:1px solid var(--line);padding-top:9px}
+.scz h4{margin:0 0 6px;font-size:11px;color:var(--mut2);text-transform:uppercase;letter-spacing:.04em}
+.scrow{display:flex;align-items:center;gap:8px;font-size:12px;margin:3px 0}
+.scrow .w{width:40px;text-align:right;color:var(--mut2)}
+.scrow .sbar{height:6px;border-radius:3px}
+.btgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.btcard{background:#0e1626;border:1px solid var(--line);border-radius:9px;padding:9px 11px}
+.btcard .lab{font-size:11px;color:var(--mut2);text-transform:uppercase;letter-spacing:.04em}
+.btcard .num{font-size:18px;font-weight:700;margin-top:3px}
+.btcard .ci{font-size:11px;color:var(--mut2)}
+.btcard .delta{font-size:11.5px;margin-top:2px}
+.btnote{font-size:12.5px;color:#cfe;background:#12233a;border:1px solid var(--line);border-radius:8px;padding:8px 11px;margin-top:11px}
+select{background:#0e1626;color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:4px 7px;font-size:12px}
+.ovl{position:fixed;inset:0;background:rgba(6,10,18,.86);z-index:100;display:flex;align-items:center;justify-content:center;padding:22px}
+.ovl-box{background:var(--panel);border:1px solid var(--line);border-radius:14px;width:min(1320px,96vw);height:min(840px,92vh);display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 70px rgba(0,0,0,.55)}
+.ovl-head{display:flex;gap:12px;align-items:center;padding:11px 16px;border-bottom:1px solid var(--line)}
+#uwrap{flex:1;min-height:0;padding:6px 12px}
+#uchart{width:100%;height:100%}
+.u-legend{color:var(--mut2)}
+.uplot,.u-wrap{width:100%!important}
+.u-over{cursor:grab}
+.tech{margin-top:11px;border-top:1px solid var(--line);padding-top:9px;display:grid;grid-template-columns:1fr 1fr;gap:3px 16px;font-size:12px}
+</style></head><body><div class="wrap">
+<h1>Elliott Wave — Calibration Platform</h1>
+<div class="sub" id="subline">loading…</div>
+<div class="caveat"><b>Research tool, not trading advice.</b> The reliability study found no statistically detectable out-of-sample edge for this engine; the weigher's apparent skill is largely market drift. Calibration explores how the gate/geometry thresholds move the setup field — it does not create edge. Size risk accordingly.</div>
+
+<!-- CONTROL PANEL -->
+<div class="panel ctl" id="ctl">
+ <div class="ctl-head" id="ctlHead">
+  <span class="chev">▼</span><h2>Calibration factors</h2>
+  <span class="pill gA">A <b id="pA">0</b></span>
+  <span class="pill gB">B <b id="pB">0</b></span>
+  <span class="pill gL">long <b id="pL">0</b></span>
+  <span class="pill gS">short <b id="pS">0</b></span>
+  <span class="pill">geometry <b id="pG">0</b>/<span id="pT">0</span></span>
+  <span class="ctl-actions">
+   <span class="pill" id="busy" style="display:none">recomputing…</span>
+   <button id="fitBtn" title="Re-run the wave fitter for the whole universe">Run fit ▶</button>
+   <span class="pill" id="fitProg" style="display:none">fitting…</span>
+   <button id="fundBtn" title="Refresh fundamentals (P/E, P/B, dividend yield) from yfinance">Update fundamentals ⭱</button>
+   <span class="pill" id="fundProg" style="display:none">updating…</span>
+   <select id="presetSel" title="Load a saved preset"><option value="">Presets…</option></select>
+   <button id="saveBtn" title="Save current factors as a preset">Save as…</button>
+   <button id="delBtn" title="Delete selected user preset">Delete</button>
+   <button id="btBtn" class="on" title="Score this calibration on the walk-forward harness">Backtest ▶</button>
+   <button id="resetBtn">Reset defaults</button>
+  </span>
+ </div>
+ <div class="ctl-body" id="ctlBody"></div>
+</div>
+
+<div class="panel bt" id="btPanel" style="display:none;margin-bottom:16px">
+ <div class="ctl-head" style="cursor:default">
+   <h2>Backtest — this calibration vs baseline</h2>
+   <span class="pill" id="btSpan"></span>
+   <span class="ctl-actions"><span class="pill" id="btBusy" style="display:none">scoring…</span></span>
+ </div>
+ <div id="btBody" style="padding:12px 16px"></div>
+</div>
+
+<div class="grid">
+ <div class="panel">
+  <div class="controls">
+   <span>MA:</span>
+   <select id="maSel"><option>20</option><option selected>50</option><option>100</option><option>200</option></select>
+   <span>Z-window:</span>
+   <select id="zSel"><option>20</option><option selected>50</option><option>100</option></select>
+   <label style="margin-left:auto"><input type="checkbox" id="onlySetups"> only actionable</label>
+   <span id="sortlbl" class="chip">sorted: Buy Score</span>
+  </div>
+  <div class="tbl-scroll"><table id="tbl"><thead><tr>
+   <th data-k="rank">#</th>
+   <th class="tk" data-k="ticker">Ticker</th>
+   <th data-k="buy">Buy</th>
+   <th data-k="grade">Setup</th>
+   <th data-k="rr">R/R</th>
+   <th data-k="last">Last</th>
+   <th data-k="maDist" id="hMA">vs MA</th>
+   <th data-k="z" id="hZ">Z</th>
+   <th data-k="pos52">52w</th>
+   <th data-k="rsi14">RSI</th>
+   <th data-k="vol20">Vol%</th>
+   <th data-k="slope50">50d↗</th>
+   <th data-k="pe" title="Trailing P/E (fundamentals)">P/E</th>
+   <th data-k="pb" title="Price / book">P/B</th>
+   <th data-k="dy" title="Trailing 12m dividend yield %">Div%</th>
+   <th class="tk" data-k="d_structure">Structure</th>
+  </tr></thead><tbody></tbody></table></div>
+ </div>
+
+ <div class="panel"><div class="chartwrap">
+  <div class="chead">
+   <div><span class="big" id="cTkr">—</span> <span id="cSig"></span></div>
+   <div class="tf" id="tfBtns">
+     <button data-tf="D" class="on">Daily</button>
+     <button data-tf="W">Weekly</button>
+     <button data-tf="M">Monthly</button>
+   </div>
+  </div>
+  <div class="sub" id="cPx" style="margin:-2px 0 6px"></div>
+  <svg id="chart" viewBox="0 0 900 420" preserveAspectRatio="xMidYMid meet" style="cursor:zoom-in"></svg>
+  <div class="sub" style="margin-top:4px;font-size:11.5px">Click chart to open a large, zoomable view (wheel = zoom, drag = pan).</div>
+  <div class="legend">
+   <span><span class="dot" style="background:#5aa0ff"></span>Price (log)</span>
+   <span><span class="dot" style="background:#f4c04d"></span>EW pivots / labels</span>
+   <span><span class="dot" style="background:#28c07a"></span>Entry / targets</span>
+   <span><span class="dot" style="background:#f0644b"></span>Stop / invalidation</span>
+  </div>
+  <div class="meta" id="cMeta"></div>
+  <div class="tech" id="cTech"></div>
+  <div class="tech" id="cFund"></div>
+  <div class="scz" id="cScz"></div>
+ </div></div>
+</div>
+<div class="sub" style="margin-top:14px">Buy Score = summed weight of long-implying wave counts (0–100), independent of calibration. Setup grade / R/R / entry recompute live from the factors above. Technical columns are point-in-time as of the scan date. Structure/degree describe the selected timeframe's count.</div>
+</div>
+<div id="ovl" class="ovl" style="display:none">
+ <div class="ovl-box">
+  <div class="ovl-head">
+   <div><span class="big" id="ovTkr">—</span> <span id="ovMeta" class="sub" style="margin:0"></span></div>
+   <div class="tf" id="ovTf"><button data-tf="D" class="on">Daily</button><button data-tf="W">Weekly</button><button data-tf="M">Monthly</button></div>
+   <span class="chip" style="margin-left:6px">wheel = zoom · drag = pan · double-click = reset</span>
+   <span style="margin-left:auto;display:flex;gap:8px">
+     <button id="ovRefit" title="Re-run the wave fit for this stock">Re-fit ⟳</button>
+     <button id="ovClose">✕ Close</button>
+   </span>
+  </div>
+  <div id="uwrap"><div id="uchart"></div></div>
+  <div class="legend" style="padding:6px 16px 12px">
+   <span><span class="dot" style="background:#5aa0ff"></span>Price (log)</span>
+   <span><span class="dot" style="background:#f4c04d"></span>EW pivots / labels</span>
+   <span><span class="dot" style="background:#28c07a"></span>Entry / targets</span>
+   <span><span class="dot" style="background:#f0644b"></span>Stop / invalidation</span>
+  </div>
+ </div>
+</div>
+<script src="app.js"></script>
+</body></html>

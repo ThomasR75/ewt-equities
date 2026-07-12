@@ -1,20 +1,14 @@
-# Python
 __pycache__/
 *.py[cod]
-*.egg-info/
-.pytest_cache/
-.ipynb_checkpoints/
-
-# Virtual environments
 .venv/
-venv/
-env/
-
-# Generated artifacts (reproducible from code + data/ — see README)
 records/
-
-# OS / editor
-.DS_Store
-Thumbs.db
-.idea/
-.vscode/
+_new_repos/
+_synctest.txt
+calib/*.pkl
+calib/price_split/
+calib/bt_shards/
+calib/bt_prices/
+calib/raw_stooq/
+calib/fit_progress.json
+calib/backtest_progress.json
+calib/presets.json
