@@ -10,7 +10,7 @@ reliability harness, and save factor **presets**. Universe-agnostic — works fo
 
 ```bash
 pip install -r requirements.txt          # flask (+ joblib, lightgbm for fitting)
-python -m calib.precompute               # fit all stocks -> calib/calib_state.pkl
+python -m calib.precompute               # fit BOTH engines -> calib/states/*.pkl
 python -m calib.app                      # http://127.0.0.1:5000
 ```
 
@@ -80,6 +80,44 @@ full set (trailing/forward P/E and EPS, P/B, market cap, and dividend yield for
 the last two years plus forward). The **Update fundamentals** button runs the
 same fetch in the background and reloads — no wave re-fit. Needs `yfinance` in
 the server env; the button disables itself and says so if it's missing.
+
+## Engines (live toggle)
+
+Two interchangeable reads of the same names, switchable from the **engine**
+dropdown in the header (`calib/engine_config.py`):
+
+- **GBT · log pivots** (`gbt_log`) — fixed-percentage pivots + the GBT-trained
+  weigher. The canonical engine (needs joblib+lightgbm+sklearn to *fit*).
+- **Deterministic · ATR pivots** (`atr_det`) — volatility-proportional ATR
+  pivots + the deterministic weigher. Needs **no ML deps**; better suited to FX
+  and low-vol names.
+
+Build them with `python -m calib.precompute` (both) or
+`python -m calib.precompute --engine atr_det`. Each writes
+`calib/states/<engine>.pkl`; the server loads all of them and every request
+(`/api/data`, `/api/chart`, `/api/calibrate`) takes an `engine` parameter.
+Switching the dropdown refetches that engine's read and re-applies your current
+calibration factors instantly.
+
+## EWT rules button
+
+The **EWT rules** button opens a panel listing the rule engine exactly as coded
+(`/api/rules` → `calib/rules_catalog.py`), built from the *live* constants in
+`ewt/rules/*` so the descriptions can't drift: the three cardinal filters, the
+impulse/diagonal split, the corrective structures (zigzag / flat family /
+triangles) with their thresholds and fib target bands, and the seven weighted
+guideline scores — plus the log-vs-arithmetic scale rule.
+
+## Adding instruments
+
+Append extra tickers to the universe without a full re-fetch:
+
+```bash
+python -m calib.add_tickers                 # BABA, USDJPY=X, 4419.T (Finatext)
+python -m calib.add_tickers --tickers "NVDA,BABA:BABA:Alibaba"
+python -m calib.precompute                  # re-fit both engines incl. the new ids
+python -m calib.fetch_fundamentals --resume # fundamentals for the new equities
+```
 
 ## Using the dashboard
 

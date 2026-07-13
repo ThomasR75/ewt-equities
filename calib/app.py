@@ -18,9 +18,10 @@ from __future__ import annotations
 import os, sys, json, pickle, threading
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory, Response
 
 from ewt.signal.calib import CalibConfig, FACTOR_META, DEFAULT
+from calib.engine_config import ENGINES, DEFAULT_ENGINE
 from ewt.signal.setup import build_setup
 from ewt.signal.grade import grade_setup
 from calib import backtest as bt
@@ -32,8 +33,28 @@ FIT_PROG = os.path.join(HERE, "fit_progress.json")
 
 app = Flask(__name__, static_folder=HERE, static_url_path="")
 
-STATE = {"records": [], "as_of": None, "built": None, "n": 0}
-RECORDS = []
+# --- hosted (read-only, password-gated) mode --------------------------------
+HOSTED = os.environ.get("EWT_HOSTED", "").lower() not in ("", "0", "false", "no")
+AUTH_USER = os.environ.get("HOSTED_USER", "admin")
+AUTH_PASS = os.environ.get("HOSTED_PASS")
+
+
+@app.before_request
+def _auth_gate():
+    if not HOSTED:
+        return
+    if not AUTH_PASS:
+        return Response("Server not configured: set the HOSTED_PASS secret.", 503)
+    a = request.authorization
+    if not a or a.username != AUTH_USER or a.password != AUTH_PASS:
+        return Response("Login required", 401, {"WWW-Authenticate": 'Basic realm="EWT dashboard"'})
+
+
+def _no_write():
+    return jsonify({"error": "disabled in hosted (read-only) mode"}), 403
+
+STATES = {}            # engine -> {records, as_of, built, n}
+STATES_DIR = os.path.join(HERE, "states")
 _LOCK = threading.RLock()
 _FIT = {"running": False, "phase": "idle", "done": 0, "total": 0, "error": None}
 _FUND = {"data": {}, "as_of": None, "updated": None}
@@ -53,20 +74,44 @@ def load_fundamentals():
             print("fundamentals load failed:", e)
 
 
-def load_state():
-    global STATE, RECORDS
-    if os.path.exists(STATE_PATH):
+def load_states():
+    global STATES
+    import glob
+    STATES = {}
+    for pth in sorted(glob.glob(os.path.join(STATES_DIR, "*.pkl"))):
+        eng = os.path.basename(pth)[:-4]
         try:
-            STATE = pickle.load(open(STATE_PATH, "rb"))
-            RECORDS = STATE["records"]
-            print(f"loaded {STATE['n']} stocks (as_of {STATE['as_of']}, built {STATE['built']})")
+            STATES[eng] = pickle.load(open(pth, "rb"))
         except Exception as e:
-            print(f"calib_state.pkl unreadable ({e}) — re-run python -m calib.precompute")
+            print(f"state {eng} unreadable ({e})")
+    # legacy single-file state -> treat as the default engine
+    if os.path.exists(STATE_PATH) and DEFAULT_ENGINE not in STATES:
+        try:
+            st = pickle.load(open(STATE_PATH, "rb")); st.setdefault("engine", DEFAULT_ENGINE)
+            STATES[st.get("engine", DEFAULT_ENGINE)] = st
+        except Exception as e:
+            print(f"legacy calib_state.pkl unreadable ({e})")
+    if STATES:
+        for eng, st in STATES.items():
+            print(f"loaded engine {eng}: {st.get('n')} stocks (as_of {st.get('as_of')})")
     else:
-        print("no calib_state.pkl yet — use the dashboard Run-fit button or python -m calib.precompute")
+        print("no states yet — run python -m calib.precompute")
 
 
-load_state()
+def active_engine(name):
+    if name in STATES:
+        return name
+    if DEFAULT_ENGINE in STATES:
+        return DEFAULT_ENGINE
+    return next(iter(STATES), None)
+
+
+def records_for(engine):
+    st = STATES.get(engine)
+    return st["records"] if st else []
+
+
+load_states()
 load_fundamentals()
 
 _BT = {"state": None, "bars": None, "baseline": None, "lock": threading.Lock()}
@@ -131,22 +176,52 @@ def factors():
     return jsonify({"meta": meta, "defaults": DEFAULT.to_dict(), "ext_ratios": list(DEFAULT.ext_ratios)})
 
 
+@app.route("/api/rules")
+def rules():
+    from calib.rules_catalog import build_catalog
+    return jsonify(build_catalog())
+
+
+@app.route("/api/config")
+def config():
+    return jsonify({"hosted": HOSTED, "read_only": HOSTED})
+
+
 @app.route("/api/data")
 def data():
+    engine = active_engine(request.args.get("engine", DEFAULT_ENGINE))
     with _LOCK:
         recs = []
-        for r in RECORDS:
+        for r in records_for(engine):
             d = _static_record(r); d["calib"] = calibrate_record(r, DEFAULT)
             d["fund"] = _FUND["data"].get(r["stock_id"]); recs.append(d)
-        return jsonify({"as_of": STATE["as_of"], "built": STATE["built"], "n": len(recs),
-                        "records": recs, "summary": _grade_counts(recs),
+        st = STATES.get(engine, {})
+        return jsonify({"engine": engine, "as_of": st.get("as_of"), "built": st.get("built"),
+                        "n": len(recs), "records": recs, "summary": _grade_counts(recs),
                         "fund_as_of": _FUND["as_of"], "fund_updated": _FUND["updated"]})
+
+
+@app.route("/api/engines")
+def engines():
+    out = []
+    for name, spec in ENGINES.items():
+        if name in STATES:
+            st = STATES[name]
+            out.append({"name": name, "label": spec["label"], "as_of": st.get("as_of"),
+                        "n": st.get("n"), "weigher": spec["weigher"], "pivot_mode": spec["pivot_mode"]})
+    for name in STATES:  # any engine not in the known list
+        if name not in ENGINES:
+            st = STATES[name]
+            out.append({"name": name, "label": name, "as_of": st.get("as_of"), "n": st.get("n")})
+    default = DEFAULT_ENGINE if DEFAULT_ENGINE in STATES else (out[0]["name"] if out else None)
+    return jsonify({"engines": out, "default": default})
 
 
 @app.route("/api/chart/<int:sid>")
 def chart(sid):
+    engine = active_engine(request.args.get("engine", DEFAULT_ENGINE))
     with _LOCK:
-        rec = next((r for r in RECORDS if r["stock_id"] == sid), None)
+        rec = next((r for r in records_for(engine) if r["stock_id"] == sid), None)
     if rec is None:
         return jsonify({"error": "unknown stock"}), 404
     return jsonify({"stock_id": sid, "ticker": rec["ticker"], "charts": rec.get("charts", {})})
@@ -154,9 +229,11 @@ def chart(sid):
 
 @app.route("/api/calibrate", methods=["POST"])
 def calibrate():
-    cfg = CalibConfig.from_dict(request.get_json(force=True) or {})
+    body = request.get_json(force=True) or {}
+    engine = active_engine(body.get("engine", DEFAULT_ENGINE))
+    cfg = CalibConfig.from_dict(body)
     with _LOCK:
-        res = {r["stock_id"]: calibrate_record(r, cfg) for r in RECORDS}
+        res = {r["stock_id"]: calibrate_record(r, cfg) for r in records_for(engine)}
     summary = _grade_counts([{"calib": v} for v in res.values()])
     return jsonify({"results": res, "summary": summary})
 
@@ -178,10 +255,11 @@ def fit_status():
     return jsonify({"running": _FIT["running"], "phase": _FIT["phase"],
                     "done": _FIT["done"], "total": _FIT["total"], "error": _FIT["error"],
                     "weigher_available": weigher_ok, "weigher_msg": msg,
-                    "n_loaded": len(RECORDS), "as_of": STATE["as_of"], "progress": prog})
+                    "n_loaded": sum(st.get("n", 0) for st in STATES.values()),
+                    "engines_loaded": list(STATES), "progress": prog})
 
 
-def _run_universe_fit(ids):
+def _run_universe_fit(ids, engine):
     global _FIT
     try:
         fitter = _fitter()
@@ -189,8 +267,8 @@ def _run_universe_fit(ids):
         def on_step(done, total):
             _FIT.update(done=done, total=total, phase="fitting")
         _FIT.update(running=True, phase="fitting", done=0, total=len(ids or fitter.all_ids()), error=None)
-        fitter.fit_universe(ids, on_step=on_step)
-        load_state()
+        fitter.fit_universe(ids, on_step=on_step, engine=engine)
+        load_states()
         _FIT.update(running=False, phase="done")
     except Exception as e:
         _FIT.update(running=False, phase="error", error=str(e))
@@ -199,35 +277,42 @@ def _run_universe_fit(ids):
 
 @app.route("/api/fit/universe", methods=["POST"])
 def fit_universe():
+    if HOSTED:
+        return _no_write()
     if _FIT["running"]:
         return jsonify({"error": "a fit is already running"}), 409
     body = request.get_json(silent=True) or {}
     ids = body.get("ids")  # optional list; None = all in mapping
-    t = threading.Thread(target=_run_universe_fit, args=(ids,), daemon=True)
+    engine = body.get("engine", DEFAULT_ENGINE)
+    t = threading.Thread(target=_run_universe_fit, args=(ids, engine), daemon=True)
     t.start()
-    return jsonify({"started": True})
+    return jsonify({"started": True, "engine": engine})
 
 
 @app.route("/api/fit/stock", methods=["POST"])
 def fit_stock():
+    if HOSTED:
+        return _no_write()
     body = request.get_json(force=True) or {}
     sid = body.get("stock_id")
+    engine = active_engine(body.get("engine", DEFAULT_ENGINE))
     if sid is None:
         return jsonify({"error": "stock_id required"}), 400
     try:
         fitter = _fitter()
-        rec = fitter.fit_one(int(sid))
+        rec = fitter.fit_one(int(sid), engine=engine)
     except Exception as e:
         return jsonify({"error": f"fit failed: {e}"}), 400
     if rec is None:
         return jsonify({"error": "not enough data to fit"}), 400
     with _LOCK:
-        for i, r in enumerate(RECORDS):
+        recs = records_for(engine)
+        for i, r in enumerate(recs):
             if r["stock_id"] == int(sid):
-                RECORDS[i] = rec
+                recs[i] = rec
                 break
         else:
-            RECORDS.append(rec)
+            recs.append(rec)
         out = _static_record(rec); out["calib"] = calibrate_record(rec, DEFAULT)
     return jsonify({"record": out})
 
@@ -264,6 +349,8 @@ def _run_fund_update(resume):
 
 @app.route("/api/fundamentals/update", methods=["POST"])
 def fundamentals_update():
+    if HOSTED:
+        return _no_write()
     if _FUNDJOB["running"]:
         return jsonify({"error": "an update is already running"}), 409
     resume = bool((request.get_json(silent=True) or {}).get("resume", False))
@@ -284,6 +371,8 @@ def backtest_status():
 
 @app.route("/api/backtest", methods=["POST"])
 def backtest():
+    if HOSTED:
+        return _no_write()
     with _BT["lock"]:
         if _BT["state"] is None:
             st = bt.load_state()
@@ -350,4 +439,4 @@ def presets_delete(name):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
-    app.run(host="127.0.0.1", port=port, debug=False, threaded=True)
+    app.run(host="0.0.0.0" if HOSTED else "127.0.0.1", port=port, debug=False, threaded=True)

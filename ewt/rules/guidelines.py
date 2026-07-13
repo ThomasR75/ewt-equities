@@ -35,7 +35,15 @@ _WEIGHTS = {
 }
 
 
-def _closeness(x: float, targets: list[float], tol: float = 0.15) -> float:
+GUIDELINE_TOL = 0.15
+FIB_W2 = [0.5, 0.618]
+FIB_W4 = [0.236, 0.382, 0.5]
+FIB_W3 = [1.618, 2.618]
+EQUALITY_W5 = [1.0, 0.618]
+ALTERNATION_SCALE = 0.35
+
+
+def _closeness(x: float, targets: list[float], tol: float = GUIDELINE_TOL) -> float:
     """1.0 at a target ratio, decaying gaussian away from it."""
     if x <= 0 or math.isinf(x):
         return 0.0
@@ -55,17 +63,17 @@ def score_guidelines(
     scores["w3_extension"] = 1.0 if w3 == longest and w3 > 0 else (w3 / longest if longest else 0.0)
 
     # Canonical retracement / extension bands.
-    scores["fib_w2"] = _closeness(w2 / w1 if w1 else math.inf, [0.5, 0.618])
-    scores["fib_w4"] = _closeness(w4 / w3 if w3 else math.inf, [0.236, 0.382, 0.5])
-    scores["fib_w3"] = _closeness(w3 / w1 if w1 else math.inf, [1.618, 2.618])
+    scores["fib_w2"] = _closeness(w2 / w1 if w1 else math.inf, FIB_W2)
+    scores["fib_w4"] = _closeness(w4 / w3 if w3 else math.inf, FIB_W4)
+    scores["fib_w3"] = _closeness(w3 / w1 if w1 else math.inf, FIB_W3)
 
     # Wave equality: W5 ~ W1 (esp. when W3 extends), else W5 ~ .618*W1.
-    scores["equality_w5"] = _closeness(w5 / w1 if w1 else math.inf, [1.0, 0.618])
+    scores["equality_w5"] = _closeness(w5 / w1 if w1 else math.inf, EQUALITY_W5)
 
     # Alternation: W2 and W4 should differ in depth (one deep, one shallow).
     r2 = w2 / w1 if w1 else 0.0
     r4 = w4 / w3 if w3 else 0.0
-    scores["alternation"] = min(1.0, abs(r2 - r4) / 0.35)
+    scores["alternation"] = min(1.0, abs(r2 - r4) / ALTERNATION_SCALE)
 
     # Volume tends to peak in W3 (only if volume data is present and non-trivial).
     if volumes and len(volumes) == 5 and sum(volumes) > 0:

@@ -5,6 +5,7 @@ records/
 _new_repos/
 _synctest.txt
 calib/*.pkl
+calib/states/
 calib/price_split/
 calib/bt_shards/
 calib/bt_prices/

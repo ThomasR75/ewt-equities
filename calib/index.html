@@ -87,6 +87,14 @@ svg{width:100%;height:auto;display:block;background:#111a29;border-radius:8px}
 .btcard .num{font-size:18px;font-weight:700;margin-top:3px}
 .btcard .ci{font-size:11px;color:var(--mut2)}
 .btcard .delta{font-size:11.5px;margin-top:2px}
+.rgrp{margin-bottom:16px}
+.rgrp h3{font-size:13px;color:var(--acc);margin:0 0 4px;text-transform:uppercase;letter-spacing:.05em}
+.rgrp .note{font-size:12px;color:var(--mut2);margin:0 0 8px}
+.rrule{background:#0e1626;border:1px solid var(--line);border-radius:9px;padding:9px 11px;margin:6px 0}
+.rrule .rn{font-weight:700;font-size:13px}
+.rrule .rc{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:#9fd;background:#0a1220;border:1px solid var(--line);border-radius:5px;padding:1px 6px;margin-left:6px}
+.rrule .rd{font-size:12.5px;color:#c6d3e6;margin-top:4px}
+.rrule .rw{font-size:11px;color:var(--gold)}
 .btnote{font-size:12.5px;color:#cfe;background:#12233a;border:1px solid var(--line);border-radius:8px;padding:8px 11px;margin-top:11px}
 select{background:#0e1626;color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:4px 7px;font-size:12px}
 .ovl{position:fixed;inset:0;background:rgba(6,10,18,.86);z-index:100;display:flex;align-items:center;justify-content:center;padding:22px}
@@ -113,6 +121,8 @@ select{background:#0e1626;color:var(--ink);border:1px solid var(--line);border-r
   <span class="pill gS">short <b id="pS">0</b></span>
   <span class="pill">geometry <b id="pG">0</b>/<span id="pT">0</span></span>
   <span class="ctl-actions">
+   <span class="pill" style="background:#12233a;border-color:#2f4a7a">engine <select id="engineSel" title="Wave engine — switch the precomputed read" style="margin-left:4px"></select></span>
+   <button id="rulesBtn" title="Show the EWT rules exactly as coded">EWT rules</button>
    <span class="pill" id="busy" style="display:none">recomputing…</span>
    <button id="fitBtn" title="Re-run the wave fitter for the whole universe">Run fit ▶</button>
    <span class="pill" id="fitProg" style="display:none">fitting…</span>
@@ -193,6 +203,16 @@ select{background:#0e1626;color:var(--ink);border:1px solid var(--line);border-r
 </div>
 <div class="sub" style="margin-top:14px">Buy Score = summed weight of long-implying wave counts (0–100), independent of calibration. Setup grade / R/R / entry recompute live from the factors above. Technical columns are point-in-time as of the scan date. Structure/degree describe the selected timeframe's count.</div>
 </div>
+<div id="rovl" class="ovl" style="display:none">
+ <div class="ovl-box">
+  <div class="ovl-head">
+   <div><span class="big">EWT rules</span> <span class="sub" style="margin:0">as implemented in <code>ewt/rules/</code></span></div>
+   <span style="margin-left:auto"><button id="rulesClose">✕ Close</button></span>
+  </div>
+  <div id="rulesBody" style="overflow:auto;padding:14px 18px"></div>
+ </div>
+</div>
+
 <div id="ovl" class="ovl" style="display:none">
  <div class="ovl-box">
   <div class="ovl-head">

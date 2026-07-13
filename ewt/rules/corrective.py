@@ -29,6 +29,14 @@ from .base import resolve_scale
 
 # Depth of wave B that separates a (sharp) zigzag from a (sideways) flat.
 ZIGZAG_MAX_B = 0.81
+CORRECTIVE_TOL = 0.18
+ZZ_B_TARGETS = [0.5, 0.618, 0.786]
+ZZ_C_TARGETS = [0.618, 1.0, 1.618]
+FLAT_REGULAR_MAX = 1.05
+FLAT_REGULAR_B, FLAT_REGULAR_C = [1.0], [1.0]
+FLAT_RUNNING_B, FLAT_RUNNING_C = [1.1, 1.236, 1.382], [0.6, 0.8]
+FLAT_EXPANDED_B, FLAT_EXPANDED_C = [1.1, 1.236, 1.382], [1.0, 1.236, 1.618]
+TRIANGLE_RATIOS = [0.618, 0.786]
 
 
 @dataclass
@@ -39,7 +47,7 @@ class CorrectiveFit:
     detail: str = ""
 
 
-def _closeness(x: float, targets, tol: float = 0.18) -> float:
+def _closeness(x: float, targets, tol: float = CORRECTIVE_TOL) -> float:
     if x <= 0 or math.isinf(x):
         return 0.0
     return max(math.exp(-(((x - t) / tol) ** 2)) for t in targets)
@@ -77,19 +85,19 @@ def analyze_abc(legs: list[Leg], scale: str = "auto") -> CorrectiveFit | None:
 
     if br < ZIGZAG_MAX_B:
         # Zigzag: needs C to make progress (>= ~0.618 A) and ideally a new extreme.
-        score = _closeness(br, [0.5, 0.618, 0.786]) * _closeness(cr, [0.618, 1.0, 1.618])
+        score = _closeness(br, ZZ_B_TARGETS) * _closeness(cr, ZZ_C_TARGETS)
         if extends:
             score = min(1.0, score * 1.15)
         return CorrectiveFit("zigzag", "", round(score, 4),
                              f"B/A={br:.3f} C/A={cr:.3f} extends={extends} [{sc}]")
 
     # Flat family (deep B).
-    if br <= 1.05 and cr <= 1.05:
-        subtype, sc_b, sc_c = "regular", [1.0], [1.0]
+    if br <= FLAT_REGULAR_MAX and cr <= FLAT_REGULAR_MAX:
+        subtype, sc_b, sc_c = "regular", FLAT_REGULAR_B, FLAT_REGULAR_C
     elif br > 1.0 and not extends:
-        subtype, sc_b, sc_c = "running", [1.1, 1.236, 1.382], [0.6, 0.8]
+        subtype, sc_b, sc_c = "running", FLAT_RUNNING_B, FLAT_RUNNING_C
     else:
-        subtype, sc_b, sc_c = "expanded", [1.1, 1.236, 1.382], [1.0, 1.236, 1.618]
+        subtype, sc_b, sc_c = "expanded", FLAT_EXPANDED_B, FLAT_EXPANDED_C
     score = _closeness(br, sc_b) * _closeness(cr, sc_c)
     return CorrectiveFit("flat", subtype, round(score, 4),
                          f"B/A={br:.3f} C/A={cr:.3f} extends={extends} [{sc}]")
@@ -111,15 +119,15 @@ def analyze_triangle(legs: list[Leg], scale: str = "auto") -> CorrectiveFit | No
     if contracting:
         # Each leg ~0.618 of the prior same-direction leg in the ideal case.
         score = (
-            _closeness(c / a, [0.618, 0.786])
-            * _closeness(e / c, [0.618, 0.786])
-            * _closeness(d / b, [0.618, 0.786])
+            _closeness(c / a, TRIANGLE_RATIOS)
+            * _closeness(e / c, TRIANGLE_RATIOS)
+            * _closeness(d / b, TRIANGLE_RATIOS)
         ) ** (1 / 3)
     else:
         score = (
-            _closeness(a / c, [0.618, 0.786])
-            * _closeness(c / e, [0.618, 0.786])
-            * _closeness(b / d, [0.618, 0.786])
+            _closeness(a / c, TRIANGLE_RATIOS)
+            * _closeness(c / e, TRIANGLE_RATIOS)
+            * _closeness(b / d, TRIANGLE_RATIOS)
         ) ** (1 / 3)
     return CorrectiveFit("triangle", subtype, round(score, 4),
                          f"legs={a:.3f},{b:.3f},{c:.3f},{d:.3f},{e:.3f} [{sc}]")

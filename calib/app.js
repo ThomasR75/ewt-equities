@@ -2,7 +2,8 @@
 let DATA=[], BYID={}, META=[], DEFAULTS={}, EXT=[];
 let sortK="buy", sortDir=-1, onlySetups=false, sel=null, tf="D";
 let maWin="50", zWin="50", CUR=null, FUND_ASOF=null;
-const CHART={};                         // stock_id -> {D,W,M} chart data (lazy)
+const CHART={};                         // "engine:stock_id" -> {D,W,M} chart data (lazy)
+let ENGINE="gbt_log", ENGINES=[];
 const $=s=>document.querySelector(s);
 const tb=$("#tbl tbody");
 const fmt=(v,d=2)=>v==null||isNaN(v)?"—":(+v).toFixed(d);
@@ -11,13 +12,37 @@ const sgn=v=>v==null?"":(v>=0?"pos":"neg");
 const T=d=>new Date(d).getTime();
 
 async function init(){
-  const [f,d]=await Promise.all([
+  const [f,eng]=await Promise.all([
     fetch("api/factors").then(r=>r.json()),
-    fetch("api/data").then(r=>r.json())
+    fetch("api/engines").then(r=>r.json()).catch(()=>({engines:[],default:null}))
   ]);
   META=f.meta; DEFAULTS=f.defaults; EXT=f.ext_ratios;
+  ENGINES=eng.engines||[]; ENGINE=eng.default||(ENGINES[0]&&ENGINES[0].name)||"gbt_log";
+  buildEngineSel();
+  const d=await fetch("api/data?engine="+ENGINE).then(r=>r.json());
   setData(d);
-  buildControls(); loadPresets(); refreshFitStatus(); refreshFundStatus();
+  buildControls(); loadPresets();
+  const cfg=await fetch("api/config").then(r=>r.json()).catch(()=>({hosted:false}));
+  if(cfg.hosted){ applyHosted(); }
+  else { refreshFitStatus(); refreshFundStatus(); }
+}
+function applyHosted(){
+  // read-only cloud view: hide the buttons that mutate/compute server-side
+  ["#fitBtn","#fitProg","#fundBtn","#fundProg","#btBtn"].forEach(id=>{const e=document.querySelector(id); if(e)e.style.display="none";});
+  const s=document.querySelector("#subline"); if(s)s.innerHTML+=' <span class="chip">read-only cloud view</span>';
+}
+function buildEngineSel(){
+  const sel=document.querySelector("#engineSel"); if(!sel)return;
+  sel.innerHTML="";
+  ENGINES.forEach(e=>{const o=document.createElement("option");o.value=e.name;
+    o.textContent=e.label+(e.n?` · ${e.n}`:"");o.selected=(e.name===ENGINE);sel.appendChild(o);});
+  sel.disabled = ENGINES.length<2;
+  sel.onchange=async ev=>{
+    ENGINE=ev.target.value;
+    for(const k in CHART)delete CHART[k];
+    const d=await fetch("api/data?engine="+ENGINE).then(r=>r.json());
+    setData(d); calibrate();
+  };
 }
 function setData(d){
   DATA=d.records; BYID={}; DATA.forEach(x=>BYID[x.stock_id]=x);
@@ -67,7 +92,7 @@ let calibTimer=null;
 function scheduleCalibrate(){clearTimeout(calibTimer);calibTimer=setTimeout(calibrate,160);}
 async function calibrate(){
   $("#busy").style.display="inline-flex";
-  const res=await fetch("api/calibrate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(collectCfg())}).then(r=>r.json());
+  const res=await fetch("api/calibrate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...collectCfg(),engine:ENGINE})}).then(r=>r.json());
   DATA.forEach(x=>{if(res.results[x.stock_id])x.calib=res.results[x.stock_id];});
   updateSummary(res.summary); render();
   if(CUR&&BYID[CUR.stock_id]){CUR=BYID[CUR.stock_id]; drawSelected(); if($("#ovl").style.display!="none")refreshOverlayLevels();}
@@ -152,8 +177,9 @@ $("#tfBtns").querySelectorAll("button").forEach(b=>b.onclick=()=>{
 
 /* ---------- selection + charts (on demand) ---------- */
 async function ensureChart(sid){
-  if(!CHART[sid]) CHART[sid]=(await fetch("api/chart/"+sid).then(r=>r.json())).charts;
-  return CHART[sid];
+  const k=ENGINE+":"+sid;
+  if(!CHART[k]) CHART[k]=(await fetch("api/chart/"+sid+"?engine="+ENGINE).then(r=>r.json())).charts;
+  return CHART[k];
 }
 async function selectStock(sid){
   sel=sid; CUR=BYID[sid];
@@ -298,7 +324,7 @@ function overlayDrawPlugin(){
   }}};
 }
 function buildOverlay(){
-  const x=CUR,ch=(CHART[x.stock_id]||{})[tf]; if(!ch)return;
+  const x=CUR,ch=(CHART[ENGINE+":"+x.stock_id]||{})[tf]; if(!ch)return;
   $("#ovTkr").textContent=x.ticker+(x.name?` · ${x.name}`:"");
   $("#ovMeta").textContent=`${tf==="D"?"daily":tf==="W"?"weekly":"monthly"} · ${ch.structure||"—"} / ${ch.degree||"—"} · last ${fmt(x.last_price)} · as of ${x.as_of}`;
   $("#ovTf").querySelectorAll("button").forEach(b=>b.classList.toggle("on",b.dataset.tf===tf));
@@ -356,7 +382,7 @@ function pollFund(){
     else{
       $("#fundProg").style.display="none"; $("#fundBtn").disabled=false;
       if(s.error){alert("Fundamentals update error: "+s.error);return;}
-      const d=await fetch("api/data").then(r=>r.json()); setData(d); calibrate();
+      const d=await fetch("api/data?engine="+ENGINE).then(r=>r.json()); setData(d); calibrate();
     }
   };
   tick();
@@ -380,7 +406,7 @@ function pollFit(){
       $("#fitProg").style.display="none"; $("#fitBtn").disabled=false;
       if(s.phase==="error"){alert("Fit error: "+s.error);return;}
       for(const k in CHART)delete CHART[k];               // charts changed
-      const d=await fetch("api/data").then(r=>r.json()); setData(d); calibrate();
+      const d=await fetch("api/data?engine="+ENGINE).then(r=>r.json()); setData(d); calibrate();
     }
   };
   tick();
@@ -391,7 +417,7 @@ async function refitCurrent(){
   const r=await fetch("api/fit/stock",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({stock_id:CUR.stock_id})}).then(x=>x.json());
   btn.disabled=false; btn.textContent="Re-fit ⟳";
   if(r.error){alert(r.error);return;}
-  const sid=CUR.stock_id; delete CHART[sid];
+  const sid=CUR.stock_id; delete CHART[ENGINE+":"+sid];
   await calibrate();                                       // refresh table under current cfg
   CUR=BYID[sid]; await drawSelected();
 }
@@ -460,3 +486,29 @@ function renderBacktest(res,base,span){
 }
 
 init();
+
+
+/* ---------- EWT rules modal ---------- */
+let RULES=null;
+document.querySelector("#rulesBtn").onclick=openRules;
+document.querySelector("#rulesClose").onclick=()=>{document.querySelector("#rovl").style.display="none";};
+document.querySelector("#rovl").addEventListener("click",e=>{if(e.target.id==="rovl")document.querySelector("#rovl").style.display="none";});
+async function openRules(){
+  if(!RULES) RULES=await fetch("api/rules").then(r=>r.json());
+  renderRules(RULES);
+  document.querySelector("#rovl").style.display="flex";
+}
+function esc(t){return (t||"").replace(/&/g,"&amp;").replace(/</g,"&lt;");}
+function renderRules(R){
+  const rule=(name,cond,desc,extra)=>`<div class="rrule"><span class="rn">${esc(name)}</span>${cond?`<span class="rc">${esc(cond)}</span>`:""}${extra?` <span class="rw">${esc(extra)}</span>`:""}<div class="rd">${esc(desc)}</div></div>`;
+  let h=`<div class="rgrp"><p class="note">${esc(R.scale_note)}</p></div>`;
+  h+=`<div class="rgrp"><h3>Cardinal rules</h3><p class="note">${esc(R.cardinal_note)}</p>`;
+  R.cardinal.forEach(r=>h+=rule(r.name,r.condition,r.description)); h+=`</div>`;
+  h+=`<div class="rgrp"><h3>Classification</h3>`;
+  (R.classification||[]).forEach(r=>h+=rule(r.name,r.condition,"")); h+=`</div>`;
+  h+=`<div class="rgrp"><h3>Corrective structures</h3>`;
+  R.corrective.forEach(r=>h+=rule(r.name,r.condition,r.description)); h+=`</div>`;
+  h+=`<div class="rgrp"><h3>Guidelines (soft scores)</h3><p class="note">${esc(R.guideline_note)}</p>`;
+  R.guidelines.forEach(r=>h+=rule(r.name,"",r.description,`weight ${r.weight} (${r.weight_pct}%)`)); h+=`</div>`;
+  document.querySelector("#rulesBody").innerHTML=h;
+}

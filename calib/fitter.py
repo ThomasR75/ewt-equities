@@ -16,26 +16,39 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import pandas as pd
 from ewt.io.walkforward import iter_as_of
 from ewt.analyze import analyze_nested
-from ewt.weigh.trained import TrainedWeigher
 from calib.technicals import compute_technicals
+from calib.engine_config import get as get_engine, DEFAULT_ENGINE
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 CSV = os.path.join(ROOT, "records/live/prices_live.csv")
 MODEL = os.path.join(ROOT, "records/live/models/weigher_gbt.pkl")
 MAP = os.path.join(ROOT, "records/live/mapping.json")
-STATE = os.path.join(ROOT, "calib/calib_state.pkl")
+STATE = os.path.join(ROOT, "calib/calib_state.pkl")   # legacy single-engine path
+STATES_DIR = os.path.join(ROOT, "calib/states")
 SPLIT = os.path.join(ROOT, "calib/price_split")
 FIT_PROG = os.path.join(ROOT, "calib/fit_progress.json")
 MAX_PTS = 1200
 
-_WEIGHER = None
+_WEIGHERS = {}
 
 
-def get_weigher():
-    global _WEIGHER
-    if _WEIGHER is None:
-        _WEIGHER = TrainedWeigher(MODEL)
-    return _WEIGHER
+def get_weigher(engine=DEFAULT_ENGINE):
+    """Weigher for an engine. GBT is lazy-imported so the ATR/deterministic
+    engine runs with no joblib/lightgbm."""
+    eng = get_engine(engine)
+    kind = eng.get("weigher", "gbt")
+    if kind not in _WEIGHERS:
+        if kind == "gbt":
+            from ewt.weigh.trained import TrainedWeigher
+            _WEIGHERS[kind] = TrainedWeigher(MODEL)
+        else:
+            from ewt.weigh.deterministic import DeterministicWeigher
+            _WEIGHERS[kind] = DeterministicWeigher()
+    return _WEIGHERS[kind]
+
+
+def state_path(engine=DEFAULT_ENGINE):
+    return os.path.join(STATES_DIR, f"{engine}.pkl")
 
 
 def load_mapping():
@@ -112,12 +125,14 @@ def scenarios_to_json(scenarios):
              "invalidation": s.invalidation} for s in scenarios]
 
 
-def build_record(sid, sdf, minfo, weigher):
+def build_record(sid, sdf, minfo, weigher, engine=DEFAULT_ENGINE):
     """Full dashboard record for one stock (or None if too little data)."""
     if len(sdf) < 300:
         return None
     b = _latest_bars(sdf)
-    analyses, nested = analyze_nested(b)
+    eng = get_engine(engine)
+    analyses, nested = analyze_nested(b, pivot_mode=eng.get("pivot_mode", "log"),
+                                      atr_k=eng.get("atr_k"), pivot_scale=eng.get("pivot_scale", 1.0))
     D = analyses["D"]
     as_of = str(D.bars.as_of.date())
     last_price = float(D.bars.last_price)
@@ -136,7 +151,7 @@ def build_record(sid, sdf, minfo, weigher):
         nr = {"alignment": round(float(nested.alignment), 4),
               "current_wave": nested.current_wave, "degrees": nested.degrees, "note": nested.note}
     return {
-        "stock_id": sid, "ticker": minfo.get("ticker", f"S{sid}"),
+        "stock_id": sid, "engine": engine, "ticker": minfo.get("ticker", f"S{sid}"),
         "name": minfo.get("name", ""), "sector": minfo.get("sector", ""),
         "as_of": as_of, "last_price": round(last_price, 4),
         "long_score": round(long_score, 4), "short_score": round(short_score, 4),
@@ -151,41 +166,42 @@ def build_scenarios_cached(counts, weigher, last_price):
     return build_scenarios(counts, weigher=weigher, last_price=last_price)
 
 
-def fit_one(sid, weigher=None):
-    weigher = weigher or get_weigher()
+def fit_one(sid, weigher=None, engine=DEFAULT_ENGINE):
+    weigher = weigher or get_weigher(engine)
     mp = load_mapping()
     sdf = load_stock(sid)
-    return build_record(sid, sdf, mp.get(sid, {}), weigher)
+    return build_record(sid, sdf, mp.get(sid, {}), weigher, engine)
 
 
-def _write_prog(done, total, phase="fitting"):
-    json.dump({"phase": phase, "done": done, "total": total,
+def _write_prog(done, total, phase="fitting", engine=DEFAULT_ENGINE):
+    json.dump({"phase": phase, "engine": engine, "done": done, "total": total,
                "updated": datetime.datetime.now().isoformat(timespec="seconds")},
               open(FIT_PROG, "w"))
 
 
-def fit_universe(ids=None, on_step=None):
-    """Fit every stock, write calib_state.pkl. Calls on_step(done,total) each stock."""
-    weigher = get_weigher()
+def fit_universe(ids=None, on_step=None, engine=DEFAULT_ENGINE):
+    """Fit every stock under `engine`, write calib/states/<engine>.pkl."""
+    weigher = get_weigher(engine)
     mp = load_mapping()
     ids = ids or all_ids()
     ensure_split()
+    os.makedirs(STATES_DIR, exist_ok=True)
     records = []
     total = len(ids)
     for i, sid in enumerate(ids, 1):
         try:
-            rec = build_record(sid, load_stock(sid), mp.get(sid, {}), weigher)
+            rec = build_record(sid, load_stock(sid), mp.get(sid, {}), weigher, engine)
         except Exception as e:
             rec = None
             print(f"  {sid}: fit error {e}")
         if rec is not None:
             records.append(rec)
-        _write_prog(i, total)
+        _write_prog(i, total, engine=engine)
         if on_step:
             on_step(i, total)
     as_of = max((r["as_of"] for r in records), default=None)
-    state = {"built": datetime.datetime.now().isoformat(timespec="seconds"),
+    state = {"engine": engine, "built": datetime.datetime.now().isoformat(timespec="seconds"),
              "as_of": as_of, "n": len(records), "records": records}
-    pickle.dump(state, open(STATE, "wb"))
-    _write_prog(total, total, phase="done")
+    pickle.dump(state, open(state_path(engine), "wb"))
+    _write_prog(total, total, phase="done", engine=engine)
     return state
