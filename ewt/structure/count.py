@@ -20,6 +20,7 @@ from typing import Optional
 from ..schemas import Count, RuleReport
 from ..rules.cardinal import check_cardinal, diagonal_valid, impulse_valid
 from ..rules.guidelines import score_guidelines
+from ..score_config import active as _active_score
 from .pattern import WavePattern
 
 
@@ -54,7 +55,7 @@ def build_count(
 
     # A diagonal is a slightly weaker motive read than a clean impulse.
     if structure != "impulse":
-        combined *= 0.85
+        combined *= _active_score().diagonal_penalty
 
     rr = RuleReport(
         cardinal_pass=True,

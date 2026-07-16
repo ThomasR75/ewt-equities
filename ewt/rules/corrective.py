@@ -26,6 +26,7 @@ from dataclasses import dataclass
 
 from ..schemas import Leg, Scale
 from .base import resolve_scale
+from ..score_config import active as _active_score
 
 # Depth of wave B that separates a (sharp) zigzag from a (sideways) flat.
 ZIGZAG_MAX_B = 0.81
@@ -47,7 +48,8 @@ class CorrectiveFit:
     detail: str = ""
 
 
-def _closeness(x: float, targets, tol: float = CORRECTIVE_TOL) -> float:
+def _closeness(x: float, targets, tol: float | None = None) -> float:
+    tol = _active_score().corr_tol if tol is None else tol
     if x <= 0 or math.isinf(x):
         return 0.0
     return max(math.exp(-(((x - t) / tol) ** 2)) for t in targets)

@@ -4,6 +4,7 @@ let sortK="buy", sortDir=-1, onlySetups=false, sel=null, tf="D";
 let maWin="50", zWin="50", CUR=null, FUND_ASOF=null;
 const CHART={};                         // "engine:stock_id" -> {D,W,M} chart data (lazy)
 let ENGINE="gbt_log", ENGINES=[];
+let SMETA=[], SDEF={};
 const $=s=>document.querySelector(s);
 const tb=$("#tbl tbody");
 const fmt=(v,d=2)=>v==null||isNaN(v)?"—":(+v).toFixed(d);
@@ -19,6 +20,7 @@ async function init(){
   META=f.meta; DEFAULTS=f.defaults; EXT=f.ext_ratios;
   ENGINES=eng.engines||[]; ENGINE=eng.default||(ENGINES[0]&&ENGINES[0].name)||"gbt_log";
   buildEngineSel();
+  try{ const sf=await fetch("api/score_factors").then(r=>r.json()); SMETA=sf.meta||[]; SDEF=sf.defaults||{}; buildScoreControls(); }catch(e){}
   const d=await fetch("api/data?engine="+ENGINE).then(r=>r.json());
   setData(d);
   buildControls(); loadPresets();
@@ -31,6 +33,44 @@ function applyHosted(){
   ["#fitBtn","#fitProg","#fundBtn","#fundProg","#btBtn"].forEach(id=>{const e=document.querySelector(id); if(e)e.style.display="none";});
   const s=document.querySelector("#subline"); if(s)s.innerHTML+=' <span class="chip">read-only cloud view</span>';
 }
+function buildScoreControls(){
+  const body=document.querySelector("#sctlBody"); if(!body)return; body.innerHTML="";
+  [...new Set(SMETA.map(m=>m.group))].forEach(g=>{
+    const box=document.createElement("div"); box.className="grp"; box.innerHTML=`<h3>${g}</h3>`;
+    SMETA.filter(m=>m.group===g).forEach(m=>{
+      const v=SDEF[m.key];
+      const row=document.createElement("div"); row.className="f"; row.dataset.key=m.key;
+      row.innerHTML=`<label>${m.label}</label>
+        <input type="range" min="${m.min}" max="${m.max}" step="${m.step}" value="${v}" data-skey="${m.key}">
+        <span class="val">${(+v).toFixed(2)}</span>`;
+      box.appendChild(row);
+    });
+    body.appendChild(box);
+  });
+  body.querySelectorAll('input[type=range]').forEach(i=>i.addEventListener("input",e=>{
+    const row=e.target.closest(".f"); row.querySelector(".val").textContent=(+e.target.value).toFixed(2);
+    row.classList.toggle("changed", Math.abs(+e.target.value-SDEF[e.target.dataset.skey])>1e-9);
+    scheduleCalibrate();
+  }));
+}
+function collectScore(){
+  const o={}; document.querySelectorAll('#sctlBody input[type=range]').forEach(i=>o[i.dataset.skey]=+i.value); return o;
+}
+function scoreDirty(){
+  return [...document.querySelectorAll('#sctlBody input[type=range]')]
+    .some(i=>Math.abs(+i.value-SDEF[i.dataset.skey])>1e-9);
+}
+document.querySelector("#scoreReset").onclick=()=>{
+  document.querySelectorAll('#sctlBody input[type=range]').forEach(i=>{
+    i.value=SDEF[i.dataset.skey]; const row=i.closest(".f");
+    row.querySelector(".val").textContent=(+i.value).toFixed(2); row.classList.remove("changed");
+  });
+  calibrate();
+};
+document.querySelector("#sctlHead").onclick=e=>{
+  if(e.target.closest("button")||e.target.closest("input"))return;
+  document.querySelector("#sctl").classList.toggle("collapsed");
+};
 function buildEngineSel(){
   const sel=document.querySelector("#engineSel"); if(!sel)return;
   sel.innerHTML="";
@@ -92,8 +132,15 @@ let calibTimer=null;
 function scheduleCalibrate(){clearTimeout(calibTimer);calibTimer=setTimeout(calibrate,160);}
 async function calibrate(){
   $("#busy").style.display="inline-flex";
-  const res=await fetch("api/calibrate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...collectCfg(),engine:ENGINE})}).then(r=>r.json());
-  DATA.forEach(x=>{if(res.results[x.stock_id])x.calib=res.results[x.stock_id];});
+  const res=await fetch("api/calibrate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...collectCfg(),engine:ENGINE,score:(scoreDirty()?collectScore():null)})}).then(r=>r.json());
+  DATA.forEach(x=>{const r=res.results[x.stock_id]; if(!r)return; x.calib=r;
+    if(r.long_score!=null)x.long_score=r.long_score;
+    if(r.short_score!=null)x.short_score=r.short_score;
+    if(r.d_structure)x.d_structure=r.d_structure;
+    if(r.scenarios)x.scenarios_json=r.scenarios;});
+  const sn=document.querySelector("#scoreNote"), ss=document.querySelector("#scoreState");
+  if(sn){ if(res.score_note){sn.textContent=res.score_note;sn.style.display="inline-flex";} else sn.style.display="none"; }
+  if(ss) ss.textContent = res.score_applied ? "custom (live)" : (scoreDirty()?"not applied":"defaults");
   updateSummary(res.summary); render();
   if(CUR&&BYID[CUR.stock_id]){CUR=BYID[CUR.stock_id]; drawSelected(); if($("#ovl").style.display!="none")refreshOverlayLevels();}
   $("#busy").style.display="none";
@@ -454,7 +501,7 @@ function dcol(v){return v>0?"pos":v<0?"neg":"";}
 function fmtDelta(cur,base,d=2,pct=false){if(cur==null||base==null)return "";const x=cur-base;return `<span class="${dcol(x)}">Δ ${(x>=0?"+":"")+x.toFixed(d)+(pct?" pts":"")} vs baseline</span>`;}
 async function runBacktest(){
   $("#btPanel").style.display="block"; $("#btBusy").style.display="inline-flex"; $("#btBtn").textContent="Backtest ⏳";
-  const r=await fetch("api/backtest",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(collectCfg())}).then(x=>x.json());
+  const r=await fetch("api/backtest",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...collectCfg(),cutoff:(document.querySelector("#btCutoff")||{}).value||null})}).then(x=>x.json());
   $("#btBusy").style.display="none"; $("#btBtn").textContent="Backtest ▶";
   if(r.error){$("#btBody").innerHTML=`<div class="btnote">${r.error}</div>`;return;}
   renderBacktest(r.result,r.baseline,r.span);
@@ -481,6 +528,21 @@ function renderBacktest(res,base,span){
   if(w.p_engine_ge_random>0.10)notes.push(`Direction no better than a coin flip (p=${w.p_engine_ge_random}).`);
   if(A&&B&&A.mean_r<B.mean_r)notes.push("Grade A underperforms B — calibration inverted (same as the reliability study).");
   notes.push("Tuning and scoring on the same history overstates edge; a real edge must survive out-of-sample.");
+  if(w.splits){
+    const sp=w.splits, mk=(t,m)=>{
+      if(!m||!m.resolved)return card(t,"—",m&&m.note?m.note:"no setups","");
+      return card(t,`${m.expectancy>=0?"+":""}${m.expectancy} R`,
+        `n=${m.resolved} · win ${m.win_rate}% · boot95 ${m.boot95[0]} … ${m.boot95[1]}`,"");
+    };
+    g+=`<div class="rgrp" style="margin-top:14px"><h3>Train / holdout split @ ${sp.cutoff}</h3><div class="btgrid">`;
+    g+=mk("Train (before cutoff)",sp.train)+mk("Holdout (on/after cutoff)",sp.holdout)+`</div></div>`;
+    const ho=sp.holdout||{};
+    if(ho.resolved){
+      notes.push(ho.boot95 && ho.boot95[0]>0
+        ? "Holdout expectancy CI is positive — the only result here worth anything."
+        : "Holdout expectancy is not positive — a tuned set that only wins in train is overfit.");
+    } else notes.push("No resolved setups in the holdout window — the split tells you nothing yet.");
+  }
   g+=`<div class="btnote">${notes.join(" ")}</div>`;
   $("#btBody").innerHTML=g;
 }

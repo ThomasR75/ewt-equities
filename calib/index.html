@@ -131,11 +131,31 @@ select{background:#0e1626;color:var(--ink);border:1px solid var(--line);border-r
    <select id="presetSel" title="Load a saved preset"><option value="">Presets…</option></select>
    <button id="saveBtn" title="Save current factors as a preset">Save as…</button>
    <button id="delBtn" title="Delete selected user preset">Delete</button>
+   <span class="pill" title="Train/holdout split date for the backtest">holdout from <input id="btCutoff" type="date" value="2015-01-01" style="background:#0e1626;border:1px solid var(--line);color:var(--ink);border-radius:5px;padding:1px 4px;margin-left:4px"></span>
    <button id="btBtn" class="on" title="Score this calibration on the walk-forward harness">Backtest ▶</button>
    <button id="resetBtn">Reset defaults</button>
   </span>
  </div>
  <div class="ctl-body" id="ctlBody"></div>
+</div>
+
+<div class="panel ctl collapsed" id="sctl" style="margin-bottom:16px">
+ <div class="ctl-head" id="sctlHead">
+  <span class="chev">▼</span><h2>Count scoring (wave engine)</h2>
+  <span class="pill" id="scoreState">defaults</span>
+  <span class="ctl-actions">
+   <span class="pill" id="scoreNote" style="display:none;background:#2a1e12;border-color:#5a3d1a;color:#e8c890"></span>
+   <button id="scoreReset">Reset scoring</button>
+  </span>
+ </div>
+ <div class="ctl-body" id="sctlBody"></div>
+ <div class="sub" style="padding:0 16px 12px;font-size:12px">
+  Re-derives <code>Count.score</code> from the cached counts and rebuilds the scenario field live
+  (deterministic engine only). Guideline weights affect <b>motive</b> counts only; correctives are
+  scored by their own fit × size-weight × recency. Live re-scoring re-ranks the counts that survived
+  the fit — it can't resurrect counts the original beam pruning dropped. For that, re-fit:
+  <code>python -m calib.precompute --engine atr_det --label myset --score k=v,...</code>
+ </div>
 </div>
 
 <div class="panel bt" id="btPanel" style="display:none;margin-bottom:16px">

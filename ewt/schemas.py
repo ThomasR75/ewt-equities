@@ -168,6 +168,7 @@ class Count:
     labels: list[str]
     score: float = 0.0
     rule_report: Optional[RuleReport] = None
+    score_parts: dict = field(default_factory=dict)
 
 
 @dataclass

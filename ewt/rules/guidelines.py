@@ -12,6 +12,7 @@ import math
 from ..schemas import Leg, Scale
 from .base import RuleResult, resolve_scale
 from .cardinal import _impulse_log_span
+from ..score_config import active as _active_score
 
 GUIDELINE_RULES = [
     "w3_extension",
@@ -51,7 +52,8 @@ def _closeness(x: float, targets: list[float], tol: float = GUIDELINE_TOL) -> fl
 
 
 def score_guidelines(
-    legs: list[Leg], scale: str = "auto", volumes: list[float] | None = None
+    legs: list[Leg], scale: str = "auto", volumes: list[float] | None = None,
+    weights: dict | None = None
 ) -> tuple[float, dict[str, RuleResult]]:
     sc: Scale = resolve_scale(scale, _impulse_log_span(legs))
     w1, w2, w3, w4, w5 = (leg.mag(sc) for leg in legs)
@@ -81,8 +83,9 @@ def score_guidelines(
     else:
         scores["volume_w3"] = 0.5  # neutral when unknown
 
-    total_w = sum(_WEIGHTS.values())
-    combined = sum(scores[k] * _WEIGHTS[k] for k in scores) / total_w
+    W = weights or _active_score().weights() or _WEIGHTS
+    total_w = sum(W.values()) or 1e-9
+    combined = sum(scores[k] * W.get(k, 0.0) for k in scores) / total_w
 
     results = {
         k: RuleResult(k, "guideline", sc, score=v, detail=f"{v:.3f}")

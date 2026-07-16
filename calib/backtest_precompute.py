@@ -19,6 +19,7 @@ import pandas as pd
 from ewt.io.walkforward import iter_as_of
 from ewt.analyze import analyze_nested
 from ewt.weigh.trained import TrainedWeigher
+from ewt import score_config as SC
 from ewt.signal.scenario import build_scenarios
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -27,6 +28,7 @@ MODEL = os.path.join(ROOT, "records/live/models/weigher_gbt.pkl")
 MAP = os.path.join(ROOT, "records/live/mapping.json")
 SHARDS = os.path.join(ROOT, "calib/bt_shards")
 OUT = os.path.join(ROOT, "calib/backtest_state.pkl")
+LABEL = None
 PROG = os.path.join(ROOT, "calib/backtest_progress.json")
 START, STEP = "1998-01-01", "12M"
 
@@ -39,9 +41,16 @@ def _dpivots(analysis):
     return [p.ts.strftime("%Y-%m-%d") for p in pv]
 
 
+def _universe_size():
+    try:
+        return len(json.load(open(MAP)))
+    except Exception:
+        return 0
+
+
 def _write_progress():
     done = sorted(int(os.path.basename(p)[:-4]) for p in glob.glob(os.path.join(SHARDS, "*.pkl")))
-    json.dump({"done": done, "n_done": len(done), "target": 50,
+    json.dump({"done": done, "n_done": len(done), "target": _universe_size(),
                "updated": datetime.datetime.now().isoformat(timespec="seconds")},
               open(PROG, "w"))
     return len(done)
@@ -90,8 +99,43 @@ def main(ids):
         print(f"{sid} {mp.get(sid)}: {len(snaps)} snapshots in {time.time()-t0:.1f}s ({n}/50 shards)")
 
 
+def _apply_label(label, score):
+    """Point the shard dir + output at a labelled walk-forward cache, and set
+    the scoring knobs the sweep will run under."""
+    global SHARDS, OUT, LABEL
+    LABEL = label
+    if label:
+        SHARDS = os.path.join(ROOT, f"calib/bt_shards__{label}")
+        OUT = os.path.join(ROOT, f"calib/backtest_state__{label}.pkl")
+    if score:
+        d = {}
+        for tok in score.split(","):
+            if "=" in tok:
+                k, v = tok.split("=", 1); d[k.strip()] = float(v)
+        cfg = SC.ScoreConfig.from_dict(d)
+        SC.set_active(cfg)
+        print("custom scoring:", {k: v for k, v in cfg.to_dict().items()
+                                  if v != getattr(SC.DEFAULT, k)})
+
+
 if __name__ == "__main__":
-    if "--merge" in sys.argv:
+    argv = sys.argv[1:]
+    label = score = None
+    rng = None
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--label":
+            label = argv[i + 1]; i += 2; continue
+        if a == "--score":
+            score = argv[i + 1]; i += 2; continue
+        if "-" in a and a[0].isdigit():
+            rng = a
+        i += 1
+    _apply_label(label, score)
+    if "--merge" in argv:
         merge()
+    elif rng:
+        a, z = rng.split("-"); main(list(range(int(a), int(z) + 1)))
     else:
-        a, z = sys.argv[1].split("-"); main(list(range(int(a), int(z) + 1)))
+        print("usage: python -m calib.backtest_precompute 1-60 [--label X --score k=v,...]  |  --merge [--label X]")

@@ -50,10 +50,16 @@ def _wilson(k, n, z=1.96):
     return (max(0, c - h), min(1, c + h))
 
 
-def load_state():
-    if not os.path.exists(STATE_PATH):
+def state_path(label=None):
+    name = f"backtest_state__{label}.pkl" if label else "backtest_state.pkl"
+    return os.path.join(ROOT, "calib", name)
+
+
+def load_state(label=None):
+    p = state_path(label)
+    if not os.path.exists(p):
         return None
-    return pickle.load(open(STATE_PATH, "rb"))
+    return pickle.load(open(p, "rb"))
 
 
 def load_bars(ids):
@@ -66,9 +72,58 @@ def load_bars(ids):
     return out
 
 
-def score(cfg: CalibConfig, state, bars_by, boot=2000, null=1000, seed=0):
+def _subset_metrics(rows, R, flip_r, idx, boot, null, rnd):
+    """Full metric bundle for a subset of resolved rows (indices into `rows`)."""
+    n = len(idx)
+    if n == 0:
+        return {"resolved": 0, "win_rate": None, "expectancy": None, "total_r": 0.0,
+                "won": 0, "lost": 0, "invalidated": 0, "expired": 0, "grade": {},
+                "note": "no resolved setups in this window"}
+    sub = [rows[i] for i in idx]
+    Rs = [R[i] for i in idx]
+    fl = [flip_r[i] for i in idx]
+    won = sum(1 for _, o in sub if o.resolution == "won")
+    counts = {k: sum(1 for _, o in sub if o.resolution == k)
+              for k in ("won", "lost", "invalidated", "expired")}
+    mean = sum(Rs) / n
+    wlo, whi = _wilson(won, n)
+
+    means = []
+    for _ in range(boot):
+        b = [Rs[rnd.randrange(n)] for _ in range(n)]; means.append(sum(b) / n)
+    means.sort()
+    blo, bhi = means[int(0.025 * boot)], means[int(0.975 * boot)]
+    p0 = 2 * min(sum(m >= 0 for m in means), sum(m <= 0 for m in means)) / boot
+
+    nulls = []
+    for _ in range(null):
+        nulls.append(sum(Rs[j] if rnd.random() < 0.5 else fl[j] for j in range(n)) / n)
+    nulls.sort()
+    p_dir = sum(m >= mean for m in nulls) / null
+
+    grade = {}
+    for g in ("A", "B"):
+        gg = [(s, o) for s, o in sub if s["_grade"] == g]
+        if gg:
+            w = sum(1 for _, o in gg if o.resolution == "won")
+            grade[g] = {"n": len(gg), "win_pct": round(100 * w / len(gg), 1),
+                        "mean_r": round(sum(o.pnl_r for _, o in gg) / len(gg), 3)}
+
+    return {"resolved": n, "win_rate": round(100 * won / n, 1),
+            "wilson95": [round(100 * wlo, 1), round(100 * whi, 1)],
+            "expectancy": round(mean, 3), "boot95": [round(blo, 3), round(bhi, 3)],
+            "p_mean_ne_0": round(p0, 3), "total_r": round(sum(Rs), 2),
+            "won": counts["won"], "lost": counts["lost"],
+            "invalidated": counts["invalidated"], "expired": counts["expired"],
+            "null_mean": round(sum(nulls) / null, 3), "p_engine_ge_random": round(p_dir, 3),
+            "grade": grade}
+
+
+def score(cfg: CalibConfig, state, bars_by, boot=2000, null=1000, seed=0, cutoff=None):
+    """Score a calibration on the walk-forward. `cutoff` (YYYY-MM-DD) additionally
+    splits resolved setups by issue date into train (before) / holdout (on-or-after)."""
     rnd = random.Random(seed)
-    setups = []          # deduped graded setups (dicts, scoreable)
+    setups = []
     n_snapshots = 0
     for sid, sd in state["stocks"].items():
         seen = {}
@@ -81,9 +136,7 @@ def score(cfg: CalibConfig, state, bars_by, boot=2000, null=1000, seed=0):
             if su is None:
                 continue
             su = grade_setup(su, snap.get("scen") or [], cfg=cfg)
-            if su.grade is None:
-                continue
-            if su.id in seen:
+            if su.grade is None or su.id in seen:
                 continue
             seen[su.id] = True
             setups.append({
@@ -109,43 +162,18 @@ def score(cfg: CalibConfig, state, bars_by, boot=2000, null=1000, seed=0):
         return out
 
     R = [o.pnl_r for _, o in rows]
-    won = sum(1 for _, o in rows if o.resolution == "won")
-    counts = {k: sum(1 for _, o in rows if o.resolution == k)
-              for k in ("won", "lost", "invalidated", "expired")}
-    mean = sum(R) / n
-    wlo, whi = _wilson(won, n)
-
-    means = []
-    for _ in range(boot):
-        s = [R[rnd.randrange(n)] for _ in range(n)]; means.append(sum(s) / n)
-    means.sort()
-    blo, bhi = means[int(0.025 * boot)], means[int(0.975 * boot)]
-    p0 = 2 * min(sum(m >= 0 for m in means), sum(m <= 0 for m in means)) / boot
-
     flip_r = [res(_flip(s)).pnl_r for s, _ in rows]
-    nulls = []
-    for _ in range(null):
-        nulls.append(sum(R[i] if rnd.random() < 0.5 else flip_r[i] for i in range(n)) / n)
-    nulls.sort()
-    p_dir = sum(m >= mean for m in nulls) / null
+    out.update(_subset_metrics(rows, R, flip_r, list(range(n)), boot, null, rnd))
 
-    grade = {}
-    for g in ("A", "B"):
-        gg = [(s, o) for s, o in rows if s["_grade"] == g]
-        if gg:
-            w = sum(1 for _, o in gg if o.resolution == "won")
-            grade[g] = {"n": len(gg), "win_pct": round(100 * w / len(gg), 1),
-                        "mean_r": round(sum(o.pnl_r for _, o in gg) / len(gg), 3)}
-
-    out.update({
-        "win_rate": round(100 * won / n, 1), "wilson95": [round(100 * wlo, 1), round(100 * whi, 1)],
-        "expectancy": round(mean, 3), "boot95": [round(blo, 3), round(bhi, 3)],
-        "p_mean_ne_0": round(p0, 3), "total_r": round(sum(R), 2),
-        "won": counts["won"], "lost": counts["lost"],
-        "invalidated": counts["invalidated"], "expired": counts["expired"],
-        "null_mean": round(sum(nulls) / null, 3), "p_engine_ge_random": round(p_dir, 3),
-        "grade": grade,
-    })
+    if cutoff:
+        cut = pd.Timestamp(cutoff)
+        tr = [i for i, (s, _) in enumerate(rows) if pd.Timestamp(s["issued"]) < cut]
+        ho = [i for i, (s, _) in enumerate(rows) if pd.Timestamp(s["issued"]) >= cut]
+        out["splits"] = {
+            "cutoff": str(cutoff),
+            "train": _subset_metrics(rows, R, flip_r, tr, boot, null, rnd),
+            "holdout": _subset_metrics(rows, R, flip_r, ho, boot, null, rnd),
+        }
     return out
 
 

@@ -18,6 +18,7 @@ from ewt.io.walkforward import iter_as_of
 from ewt.analyze import analyze_nested
 from calib.technicals import compute_technicals
 from calib.engine_config import get as get_engine, DEFAULT_ENGINE
+from ewt import score_config as _SC
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 CSV = os.path.join(ROOT, "records/live/prices_live.csv")
@@ -47,8 +48,9 @@ def get_weigher(engine=DEFAULT_ENGINE):
     return _WEIGHERS[kind]
 
 
-def state_path(engine=DEFAULT_ENGINE):
-    return os.path.join(STATES_DIR, f"{engine}.pkl")
+def state_path(engine=DEFAULT_ENGINE, label=None):
+    name = f"{engine}__{label}" if label else engine
+    return os.path.join(STATES_DIR, f"{name}.pkl")
 
 
 def load_mapping():
@@ -157,7 +159,7 @@ def build_record(sid, sdf, minfo, weigher, engine=DEFAULT_ENGINE):
         "long_score": round(long_score, 4), "short_score": round(short_score, 4),
         "nested_read": nr, "d_structure": charts["D"]["structure"], "d_degree": charts["D"]["degree"],
         "scenarios_json": scenarios_to_json(scen), "technicals": tech, "charts": charts,
-        "_scen_objs": scen, "_lead_obj": lead,
+        "_scen_objs": scen, "_lead_obj": lead, "_counts": list(D.counts[:12]),
     }
 
 
@@ -179,7 +181,7 @@ def _write_prog(done, total, phase="fitting", engine=DEFAULT_ENGINE):
               open(FIT_PROG, "w"))
 
 
-def fit_universe(ids=None, on_step=None, engine=DEFAULT_ENGINE):
+def fit_universe(ids=None, on_step=None, engine=DEFAULT_ENGINE, label=None):
     """Fit every stock under `engine`, write calib/states/<engine>.pkl."""
     weigher = get_weigher(engine)
     mp = load_mapping()
@@ -200,8 +202,11 @@ def fit_universe(ids=None, on_step=None, engine=DEFAULT_ENGINE):
         if on_step:
             on_step(i, total)
     as_of = max((r["as_of"] for r in records), default=None)
-    state = {"engine": engine, "built": datetime.datetime.now().isoformat(timespec="seconds"),
+    eng_label = get_engine(engine).get("label", engine)
+    state = {"engine": engine, "label": (f"{eng_label} · {label}" if label else eng_label),
+             "score_config": _SC.active().to_dict(),
+             "built": datetime.datetime.now().isoformat(timespec="seconds"),
              "as_of": as_of, "n": len(records), "records": records}
-    pickle.dump(state, open(state_path(engine), "wb"))
+    pickle.dump(state, open(state_path(engine, label), "wb"))
     _write_prog(total, total, phase="done", engine=engine)
     return state

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from ..schemas import Bars, Count, PivotSeries
 from ..structure.pattern import WavePattern
 from ..structure.count import build_count, build_corrective_count
+from ..score_config import active as _active_score
 from .options import OptionsConfig, generate, generate_k
 
 
@@ -36,7 +37,7 @@ def _recency(bars, count) -> float:
     import math
     total = max(1, len(bars) - 1)
     end_idx = count.legs[-1].end.idx
-    tau = max(1.0, 0.4 * total)
+    tau = max(1.0, _active_score().recency_tau_frac * total)
     return math.exp(-(total - end_idx) / tau)
 
 
@@ -68,8 +69,11 @@ def sweep_motive(bars: Bars, pivots: PivotSeries, cfg: SweepConfig | None = None
             if count is None:
                 continue
             span_frac = wp.span_bars / total_bars
-            count.score = min(1.0, count.score + cfg.span_bonus * span_frac)
-            count.score = round(count.score * _recency(bars, count), 4)
+            rec = _recency(bars, count)
+            count.score = min(1.0, count.score + _active_score().span_bonus * span_frac)
+            count.score = round(count.score * rec, 4)
+            count.score_parts = {"motive": True, "span_frac": round(span_frac, 6),
+                                 "recency": round(rec, 6), "scale": cfg.scale}
             counts.append(count)
     counts.sort(key=lambda c: (-c.score, c.legs[0].start.idx))
     return counts[: cfg.top_n]
@@ -98,8 +102,12 @@ def sweep_corrective(bars: Bars, pivots: PivotSeries, cfg: SweepConfig | None = 
                     data_range = float(lp.max() - lp.min()) or 1e-9
                     pat_lp = [count.legs[0].start.log_price] + [l.end.log_price for l in count.legs]
                     size_frac = (max(pat_lp) - min(pat_lp)) / data_range
-                    weight = 0.4 + 0.6 * min(1.0, size_frac / 0.3)
-                    count.score = round(count.score * weight * _recency(bars, count), 4)
+                    _sc = _active_score()
+                    weight = _sc.corr_size_base + _sc.corr_size_range * min(1.0, size_frac / _sc.corr_size_sat)
+                    rec = _recency(bars, count)
+                    count.score = round(count.score * weight * rec, 4)
+                    count.score_parts = {"motive": False, "size_frac": round(size_frac, 6),
+                                         "recency": round(rec, 6), "scale": cfg.scale}
                     counts.append(count)
     counts.sort(key=lambda c: (-c.score, c.legs[0].start.idx))
     return counts[: cfg.top_n]

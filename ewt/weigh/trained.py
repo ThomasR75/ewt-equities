@@ -28,6 +28,16 @@ class TrainedWeigher:
             if flat is None:
                 return [max(0.0, f.get("fit_score", 0.0)) for f in features]
             rows.append([flat.get(c, 0.0) for c in self.cols])
-        import numpy as np
-        p = self.model.predict_proba(np.array(rows, dtype=float))[:, 1]
+        try:
+            # Named columns: matches how the model was fitted, so no
+            # "X does not have valid feature names" warning, and the columns
+            # are aligned by name rather than by position.
+            import pandas as pd
+            p = self.model.predict_proba(pd.DataFrame(rows, columns=self.cols))[:, 1]
+        except Exception:
+            import warnings
+            import numpy as np
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                p = self.model.predict_proba(np.array(rows, dtype=float))[:, 1]
         return [float(max(0.0, x)) for x in p]

@@ -22,6 +22,7 @@ from flask import Flask, jsonify, request, send_from_directory, Response
 
 from ewt.signal.calib import CalibConfig, FACTOR_META, DEFAULT
 from calib.engine_config import ENGINES, DEFAULT_ENGINE
+from ewt.score_config import ScoreConfig, FACTOR_META as SCORE_META, DEFAULT as SCORE_DEFAULT
 from ewt.signal.setup import build_setup
 from ewt.signal.grade import grade_setup
 from calib import backtest as bt
@@ -133,10 +134,32 @@ def _setup_dict(su):
             "invalidation_rule": su.invalidation_rule}
 
 
-def calibrate_record(rec, cfg):
+def calibrate_record(rec, cfg, score_cfg=None):
     lead = rec.get("_lead_obj"); scen = rec.get("_scen_objs") or []
+    long_score, short_score = rec.get("long_score"), rec.get("short_score")
+    struct = rec.get("d_structure")
+    scen_json = None
+    if score_cfg is not None and rec.get("_counts"):
+        # Re-derive Count.score under the new scoring knobs, then rebuild the
+        # scenario field with the deterministic weigher (no re-sweep).
+        from calib.rescore import rescore_counts
+        from ewt.signal.scenario import build_scenarios
+        from ewt.weigh.deterministic import DeterministicWeigher
+        from calib.fitter import scenarios_to_json
+        counts = rescore_counts(rec["_counts"], score_cfg)
+        scen = build_scenarios(counts, weigher=DeterministicWeigher(), last_price=rec["last_price"])
+        directional = [x for x in scen if not x.is_residual and x.direction != 0]
+        lead = max(directional, key=lambda x: x.weight, default=None)
+        long_score = round(sum(x.weight for x in scen if not x.is_residual and x.direction == 1), 4)
+        short_score = round(sum(x.weight for x in scen if not x.is_residual and x.direction == -1), 4)
+        top = max(counts, key=lambda c: c.score, default=None)
+        struct = top.structure if top is not None else struct
+        scen_json = scenarios_to_json(scen)
     out = {"stock_id": rec["stock_id"], "signal": "none", "grade": None,
-           "setup": None, "setup_reason": None}
+           "setup": None, "setup_reason": None,
+           "long_score": long_score, "short_score": short_score, "d_structure": struct}
+    if scen_json is not None:
+        out["scenarios"] = scen_json
     if lead is None:
         out["setup_reason"] = "no directional structure"; return out
     su = build_setup(lead, rec["last_price"], rec["as_of"], rec["ticker"], cfg=cfg)
@@ -174,6 +197,13 @@ def factors():
     meta = [{"key": k, "label": lb, "min": mn, "max": mx, "step": st, "group": g}
             for (k, lb, mn, mx, st, g) in FACTOR_META]
     return jsonify({"meta": meta, "defaults": DEFAULT.to_dict(), "ext_ratios": list(DEFAULT.ext_ratios)})
+
+
+@app.route("/api/score_factors")
+def score_factors():
+    meta = [{"key": k, "label": lb, "min": mn, "max": mx, "step": st, "group": g}
+            for (k, lb, mn, mx, st, g) in SCORE_META]
+    return jsonify({"meta": meta, "defaults": SCORE_DEFAULT.to_dict()})
 
 
 @app.route("/api/rules")
@@ -232,10 +262,24 @@ def calibrate():
     body = request.get_json(force=True) or {}
     engine = active_engine(body.get("engine", DEFAULT_ENGINE))
     cfg = CalibConfig.from_dict(body)
+    score_cfg, score_applied, score_note = None, False, None
+    raw_score = body.get("score")
+    if raw_score:
+        spec = ENGINES.get(STATES.get(engine, {}).get("engine", engine), {})
+        if spec.get("weigher") == "gbt":
+            score_note = ("live count-scoring applies to the deterministic engine; the GBT "
+                          "weigher is model-driven — switch engine, or re-fit "
+                          "(precompute --score) to apply it here")
+        elif not any(r.get("_counts") for r in records_for(engine)):
+            score_note = ("this state was fit before candidate counts were cached — re-run "
+                          "python -m calib.precompute to enable live count-scoring")
+        else:
+            score_cfg = ScoreConfig.from_dict(raw_score); score_applied = True
     with _LOCK:
-        res = {r["stock_id"]: calibrate_record(r, cfg) for r in records_for(engine)}
+        res = {r["stock_id"]: calibrate_record(r, cfg, score_cfg) for r in records_for(engine)}
     summary = _grade_counts([{"calib": v} for v in res.values()])
-    return jsonify({"results": res, "summary": summary})
+    return jsonify({"results": res, "summary": summary,
+                    "score_applied": score_applied, "score_note": score_note})
 
 
 # --- fitter ----------------------------------------------------------------
@@ -373,19 +417,26 @@ def backtest_status():
 def backtest():
     if HOSTED:
         return _no_write()
+    body = request.get_json(force=True) or {}
+    label = body.get("bt_label") or None
+    cutoff = body.get("cutoff") or None
+    key = label or "_default"
     with _BT["lock"]:
-        if _BT["state"] is None:
-            st = bt.load_state()
+        cache = _BT.setdefault("by_label", {})
+        if key not in cache:
+            st = bt.load_state(label)
             if st is None:
-                return jsonify({"error": "backtest cache not built — run "
-                                "python -m calib.backtest_precompute then --merge"}), 400
-            _BT["state"] = st; _BT["bars"] = bt.load_bars(list(st["stocks"].keys()))
-        st = _BT["state"]
-        if _BT["baseline"] is None:
-            _BT["baseline"] = bt.score(DEFAULT, st, _BT["bars"])
-        cfg = CalibConfig.from_dict(request.get_json(force=True) or {})
-        result = bt.score(cfg, st, _BT["bars"])
-    return jsonify({"result": result, "baseline": _BT["baseline"],
+                return jsonify({"error": f"backtest cache '{key}' not built — run "
+                                f"python -m calib.backtest_precompute 1-60"
+                                f"{' --label ' + label if label else ''} then --merge"}), 400
+            cache[key] = {"state": st, "bars": bt.load_bars(list(st["stocks"].keys())),
+                          "baseline": None}
+        c = cache[key]; st = c["state"]
+        if c["baseline"] is None:
+            c["baseline"] = bt.score(DEFAULT, st, c["bars"], cutoff=cutoff)
+        cfg = CalibConfig.from_dict(body)
+        result = bt.score(cfg, st, c["bars"], cutoff=cutoff)
+    return jsonify({"result": result, "baseline": c["baseline"], "bt_label": label,
                     "span": {"start": st.get("start"), "step": st.get("step"),
                              "n_stocks": st.get("n", len(st["stocks"]))}})
 
